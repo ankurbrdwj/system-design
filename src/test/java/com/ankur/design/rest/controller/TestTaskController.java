@@ -36,12 +36,12 @@ public class TestTaskController {
       "\"description\":\"task description\",\n" +
       "\"priority\":\"10\"\n" +
       "}";
-    MvcResult result= mockMvc
+     mockMvc
       .perform(put("/tasks/{id}",id)
         .accept(MediaType.APPLICATION_JSON)
         .contentType(MediaType.APPLICATION_JSON_VALUE)
-        .content(objectMapper.writeValueAsString(dto)))
-      .andExpect(status().is4xxClientError()).andReturn();
-      String content = result.getResponse().getContentAsString();
+        .content(json))
+      .andExpect(status().is4xxClientError())
+      .andExpect(jsonPath("$.message",is("Cannot find task with given id") ));
   }
 }

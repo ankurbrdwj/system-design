@@ -1,6 +1,7 @@
 package com.ankur.design.rest.controller;
 
 import com.ankur.design.rest.dto.TaskDto;
+import com.ankur.design.rest.exception.ElementNotFoundException;
 import com.ankur.design.rest.service.TaskService;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,7 +18,7 @@ public class TaskController {
   }
 
   @PutMapping("/{id}")
-  public TaskDto createTask(@PathVariable Long id, @RequestBody TaskDto task) {
+  public TaskDto createTask(@PathVariable Long id, @RequestBody TaskDto task) throws ElementNotFoundException {
     return taskService.updateTask(id,task);
   }
 }
