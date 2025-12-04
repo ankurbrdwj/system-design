@@ -51,7 +51,7 @@ public class Additions {
         Function<String, Integer> mapper5 = (k) -> 1;
         Integer jenny2 = count2.computeIfAbsent("Jenny", mapper5); // 15
         Integer sam1 = count2.computeIfAbsent("Sam", mapper5); // 1
-        Integer tom1 = count2.computeIfAbsent("Tom", mapper5); // 1
+        Integer tom1 = count2.computeIfAbsent("Tom", mapper5); // 1e
         System.out.println(jenny2); // 2
         System.out.println(sam1); // null
         System.out.println(tom1); // 2
