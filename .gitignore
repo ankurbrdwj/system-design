@@ -35,3 +35,12 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Compiled output ###
+*.class
+*.jar
+*.war
+*.ear
+
+### macOS ###
+.DS_Store

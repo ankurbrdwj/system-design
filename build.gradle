@@ -31,6 +31,15 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
+// Java Vector API requires incubator module (JDK 16+, still incubating in JDK 21)
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
+}
+
+tasks.withType(Test).configureEach {
+    jvmArgs '--add-modules', 'jdk.incubator.vector'
+}
+
 sourceSets {
     main {
         java {
