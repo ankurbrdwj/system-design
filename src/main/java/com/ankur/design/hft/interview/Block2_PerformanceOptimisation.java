@@ -49,15 +49,37 @@ public class Block2_PerformanceOptimisation {
     }
 
     /**
-     * PADDED: 56 bytes of padding after counterA push counterB onto a separate line.
-     * Layout: [8B header][8B counterA][56B pad] = 72B → counterA occupies its own line.
-     *         [8B header][8B counterB][56B pad] = 72B → counterB occupies its own line.
+     * PADDED — uses the LMAX Disruptor inheritance trick.
+     *
+     * WHY NOT plain fields: p1..p7 declared but never read/written → the JIT
+     * is free to eliminate them entirely, defeating the padding purpose.
+     *
+     * WHY INHERITANCE WORKS: the JVM spec guarantees base-class fields are
+     * laid out in memory BEFORE subclass fields. The JIT cannot reorder or
+     * remove inherited fields because it cannot prove no subclass reads them.
+     *
+     * Memory layout guaranteed:
+     *   [16B obj header]
+     *   [56B CounterAPadding.p1..p7]   ← fills rest of first cache line
+     *   [8B  CounterAValue.counterA]    ← sits alone on its own cache line
+     *   [56B CounterBPadding.p8..p14]  ← fills rest of that line
+     *   [8B  PaddedCounters.counterB]   ← sits alone on its own cache line
+     *
+     * This is exactly how Disruptor's Sequence class is padded (see disruptor/Readme.md).
      */
-    static final class PaddedCounters {
-        volatile long counterA = 0;
-        long p1, p2, p3, p4, p5, p6, p7;  // 7 × 8 = 56 bytes padding
+    static abstract class CounterAPadding {
+        // 7 longs = 56 bytes; pushes counterA to the start of the next cache line
+        protected long p1, p2, p3, p4, p5, p6, p7;
+    }
+    static abstract class CounterAValue extends CounterAPadding {
+        protected volatile long counterA = 0;
+    }
+    static abstract class CounterBPadding extends CounterAValue {
+        // 7 more longs = 56 bytes; pushes counterB to the start of the next cache line
+        protected long p8, p9, p10, p11, p12, p13, p14;
+    }
+    static final class PaddedCounters extends CounterBPadding {
         volatile long counterB = 0;
-        long q1, q2, q3, q4, q5, q6, q7;  // padding after counterB too
     }
 
     static long benchCounters(boolean padded, int iterations) throws InterruptedException {
