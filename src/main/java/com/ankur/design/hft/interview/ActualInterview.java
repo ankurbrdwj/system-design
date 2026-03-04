@@ -16,7 +16,7 @@ class Book{
         return title.equalsIgnoreCase(book.title) && (Objects.equals(firstAuthor, book.firstAuthor)
                 && (Objects.equals(secondAuthor, book.secondAuthor)
                 ||Objects.equals(firstAuthor, book.secondAuthor)
-                && (Objects.equals(secondAuthor, book.firstAuthor );
+                && (Objects.equals(secondAuthor, book.firstAuthor))));
     }
 
     public int hashCode1() {
