@@ -78,6 +78,14 @@ Do not remove this exclusion.
 | `collections` | Custom collection implementations (5 files) |
 | `solid/payroll` | SOLID principles payroll example (1 file) |
 
+### LLD Interview Challenges
+| Package | Contents |
+|---|---|
+| `lld/kayak/room/reservation/model` | `Room` (AtomicInteger), `BookingRequest` (immutable) |
+| `lld/kayak/room/reservation/service` | `RoomBookingService` interface + 4 implementations: `RoomDatabaseAccessService` (synchronized), `ReentrantLockRoomService`, `AtomicRoomService` (CAS), `SemaphoreRoomService`, `BlockingQueueRoomService` |
+| `lld/kayak/room/reservation/benchmark` | `RoomBenchmark` — load test comparing synchronized vs CAS vs unsafe |
+| `lld/elevator` | Elevator DSM: `CentralSystem`, `Elevator`, `ElevatorState`, `SystemState`, `FloorRequest` |
+
 ### Training
 | Package | Contents |
 |---|---|
@@ -90,14 +98,18 @@ Do not remove this exclusion.
 
 ```
 src/test/java/com/ankur/design/
-├── disruptor/RingBufferTest.java        ← 18 tests, ALL PASS (SpscRingBuffer)
-├── multithreading/correctness/          ← 2 test files
-├── multithreading/parallelism/          ← 1 test file
-├── multithreading/square/               ← 1 test file
-├── rate/                                ← 2 test files
-├── booking/recruitment/hotel/           ← 6 test files (FAIL — Spring context)
-├── rest/controller/                     ← 1 test file (FAIL — Spring context)
-└── ppro/                                ← 1 test file
+├── disruptor/RingBufferTest.java                          ← 18 tests, ALL PASS
+├── multithreading/correctness/                            ← 2 test files
+├── multithreading/parallelism/                            ← 1 test file
+├── multithreading/square/                                 ← 1 test file
+├── rate/                                                  ← 2 test files
+├── lld/kayak/room/reservation/MainSection1Test.java       ← Section 1: stderr/stdout
+├── lld/kayak/room/reservation/RoomDatabaseAccessServiceTest.java ← Section 2: concurrency
+├── lld/kayak/room/reservation/service/RoomBookingServiceTest.java ← all 4 strategies
+├── lld/elevator/CentralSystemTest.java                    ← DSM: dispatch, nearest, idle, emergency
+├── booking/recruitment/hotel/                             ← 6 test files (FAIL — Spring context)
+├── rest/controller/                                       ← 1 test file (FAIL — Spring context)
+└── ppro/                                                  ← 1 test file
 ```
 
 ---
@@ -110,6 +122,12 @@ src/test/java/com/ankur/design/
 - **Wall-clock vs CPU profiling**: sample all thread states vs RUNNABLE only
 - **False sharing**: 56-byte padding between hot `volatile long` fields
 - **Cache locality**: `long[]` contiguous arrays vs node-based `TreeMap`
+- **Per-room synchronization**: `synchronized(room)` — locks per room type, not global
+- **CAS booking**: `AtomicInteger.compareAndSet()` loop — lock-free, best under sustained contention
+- **Semaphore as permit pool**: `Semaphore(capacity)` — most readable for room-slot semantics
+- **BlockingQueue tokens**: one token per room slot, `poll()` = book, `offer()` = cancel
+- **Elevator DSM**: `CentralSystem` as deterministic state machine — cost-based dispatch, `EMERGENCY` blocks all
+- **JVM lock progression**: biased → thin (CAS) → fat (OS mutex) — `synchronized` often beats CAS at low contention due to lock elision and biased locking
 
 ---
 
@@ -131,6 +149,7 @@ Each HFT sub-folder has a markdown file explaining the concepts:
 | File | Topic |
 |---|---|
 | `hft/orderbook/ReadMe.md` | Low Latency Trading in C++ talk summary — 9 principles |
+| `hft/tuning/Performance.md` | Performance design summary: queueing theory, USL, cache locality, batching, branch prediction, data layout, measurement |
 | `hft/profiling/` | async-profiler: sampling, safe-point bias, wall-clock, flame graphs |
 | `hft/webcurve/README.md` | WebCurveSim architecture, package map, FIX 4.2 config |
 | `hft/architecture/architecture.md` | HFT system architecture |

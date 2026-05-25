@@ -1,247 +1,208 @@
 package com.ankur.design.hft.interview;
 
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Publisher / Subscriber — NO QUEUE
- * Thread coordination using ONE ReentrantLock + TWO Conditions only.
+ * Publish / Subscribe — EventBus with per-subscriber BlockingQueue
  *
- * TWO CONDITIONS ON ONE LOCK:
- *   eventReady    — Publisher signals → Subscriber wakes up to consume
- *   eventConsumed — Subscriber signals → Publisher wakes up to produce next
+ * WHY QUEUE, NOT ReentrantLock+Condition:
  *
- * HANDSHAKE SEQUENCE (strict alternation, one event at a time):
+ *   ReentrantLock+Condition (old code):
+ *     - Publisher BLOCKS until consumer finishes  ← handshake / exchange pattern
+ *     - One slot, strict alternation
+ *     - Suitable for: backpressure-enforced 1:1 pipeline
  *
- *   Publisher                          Subscriber
- *   ─────────────────────────────────────────────────────
- *   lock.lock()
- *   event = new Event(...)             lock.lock()
- *   eventReady.signal()  ─────────►   (was in eventReady.await())
- *   eventConsumed.await() ◄─────────  process event
- *   (woken after consumed)             eventConsumed.signal()
- *   lock.unlock()                      lock.unlock()
- *   repeat...
+ *   BlockingQueue per subscriber (this code):
+ *     - Publisher puts and returns immediately     ← true pub/sub, fire-and-forget
+ *     - Each subscriber drains its own queue at its own pace
+ *     - Multiple subscribers, each independent
+ *     - Suitable for: fan-out, event-driven systems, message bus
  *
- * WHY TWO CONDITIONS?
- *   With ONE condition (or synchronized wait/notify) both threads share the
- *   same wait set. signal() might wake the wrong thread (Publisher wakes
- *   Publisher, or Subscriber wakes Subscriber).
- *   Two conditions give each thread its own dedicated wait/signal channel.
+ * Design:
  *
- * STATIC NESTED CLASS RULES (summary):
- *   RULE 1: No reference to outer class instance — instantiated independently.
- *   RULE 2: Can only access STATIC members of outer class.
- *   RULE 3: Can have its own static and non-static members.
- *   RULE 4: Access modifier controls visibility (public/package-private/private).
- *   RULE 5: Can extend classes and implement interfaces.
- *   RULE 6: No hidden outer-class reference → no GC leak risk (unlike inner class).
- *   RULE 7: Suitable for Singleton — class object is a stable lock monitor.
+ *   Publisher ──publish()──► EventBus ──fan-out──► [Queue-A] ──► Subscriber A
+ *                                              └──► [Queue-B] ──► Subscriber B
+ *                                              └──► [Queue-C] ──► Subscriber C
+ *
+ * Rules:
+ *   - EventBus holds one LinkedBlockingQueue per registered subscriber
+ *   - publish() puts the event into EVERY subscriber's queue (fan-out)
+ *   - Each Subscriber runs on its own thread, calls take() in a loop
+ *   - Publisher never touches a lock, never waits for a consumer
+ *
+ * Poison pill: publisher sends POISON after last event; each subscriber
+ * exits its loop when it receives it (one pill per subscriber queue).
  */
 class MyCode {
 
-    // =========================================================================
-    // EventDispatcher — Singleton, two-condition handshake, no queue
-    // =========================================================================
-    public static class EventDispatcher {
+    // ── Event ─────────────────────────────────────────────────────────────────
 
-        // RULE 7 + volatile: double-checked locking requires volatile
-        private static volatile EventDispatcher instance;
+    record Event(long id, String payload) {
+        @Override public String toString() { return "Event{" + id + ",'" + payload + "'}"; }
+    }
 
-        // ONE lock, TWO conditions — each thread waits on its own condition
-        private final ReentrantLock lock           = new ReentrantLock();
-        private final Condition     eventReady     = lock.newCondition(); // Publisher→Subscriber
-        private final Condition     eventConsumed  = lock.newCondition(); // Subscriber→Publisher
+    static final Event POISON = new Event(-1, "POISON");
 
-        // Shared slot — no queue, just one event at a time
-        private Event   pendingEvent = null;
-        private boolean consumed     = true;   // true = Publisher may write next event
+    // ── EventListener ─────────────────────────────────────────────────────────
 
-        // RULE 3: non-static field in a static nested class — allowed
-        private final List<EventListener> listeners = new CopyOnWriteArrayList<>();
+    interface EventListener {
+        void onEvent(Event event);
+    }
 
-        private EventDispatcher() {}
+    // ── EventBus ──────────────────────────────────────────────────────────────
 
-        static EventDispatcher getInstance() {
-            if (instance == null) {
-                synchronized (EventDispatcher.class) {   // RULE 7
-                    if (instance == null) {
-                        instance = new EventDispatcher();
-                    }
-                }
-            }
-            return instance;
+    static class EventBus {
+
+        private final int queueCapacity;
+        // one bounded queue per subscriber — registered before publishing starts
+        // plain ArrayList — subscribers register at startup before publisher runs,
+        // so there are no concurrent writes; unmodifiableList guards against accidental mutation
+        private final List<BlockingQueue<Event>> queues =
+                Collections.synchronizedList(new ArrayList<>());
+
+        EventBus(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
         }
-
-        void addListener(EventListener listener) {
-            listeners.add(listener);
-        }
-
-        // ── Called by Publisher ──────────────────────────────────────────────
 
         /**
-         * Publisher places one event and signals the Subscriber.
-         * Then WAITS on eventConsumed until Subscriber has processed it.
-         * No queue — just a single shared slot.
+         * Register a new subscriber. Returns the queue the subscriber should drain.
+         * Must be called before publish() starts.
          */
-        void publish(Event event) throws InterruptedException {
-            lock.lock();
-            try {
-                // Wait until the previous event has been consumed
-                while (!consumed) {
-                    eventConsumed.await();   // park Publisher; releases lock
-                }
-                // Slot is free — write the event
-                pendingEvent = event;
-                consumed     = false;
-
-                // Wake the Subscriber
-                eventReady.signal();
-
-            } finally {
-                lock.unlock();
-            }
+        BlockingQueue<Event> register() {
+            LinkedBlockingQueue<Event> q = new LinkedBlockingQueue<>(queueCapacity);
+            queues.add(q);
+            return q;
         }
-
-        // ── Called by Subscriber ─────────────────────────────────────────────
 
         /**
-         * Subscriber waits until an event is available.
-         * Picks it up, then signals Publisher that the slot is free.
+         * Fan-out: put this event into every subscriber's queue.
+         * Non-blocking for the publisher — offer() drops if queue is full
+         * (use put() if you need backpressure instead).
+         *
+         * WHY NO LOCK HERE:
+         *   CopyOnWriteArrayList iteration is safe without a lock.
+         *   LinkedBlockingQueue.offer() is internally lock-free on the put side.
+         *   Publisher thread never contends with subscriber threads.
          */
-        Event consume() throws InterruptedException {
-            lock.lock();
-            try {
-                // Wait until Publisher has placed an event
-                while (consumed) {
-                    eventReady.await();   // park Subscriber; releases lock
+        void publish(Event event) {
+            for (BlockingQueue<Event> q : queues) {
+                boolean accepted = q.offer(event);
+                if (!accepted) {
+                    System.out.printf("[EventBus ] DROPPED %s — subscriber queue full%n", event);
                 }
-                Event e  = pendingEvent;
-                pendingEvent = null;
-                consumed     = true;
-
-                // Wake the Publisher — slot is free for next event
-                eventConsumed.signal();
-
-                return e;
-            } finally {
-                lock.unlock();
             }
         }
 
-        void notifyListeners(Event event) {
-            for (EventListener l : listeners) {
-                l.onEvent(event);
-            }
+        /** Send one poison pill per subscriber to shut down all consumers cleanly. */
+        void shutdown() {
+            for (BlockingQueue<Event> q : queues) q.offer(POISON);
         }
     }
 
-    // =========================================================================
-    // Event
-    // =========================================================================
-    static class Event {
-        private final String payload;
-        Event(String payload) { this.payload = payload; }
-        public String getPayload() { return payload; }
-        @Override public String toString() { return "Event{'" + payload + "'}"; }
-    }
+    // ── Subscriber ────────────────────────────────────────────────────────────
 
-    // =========================================================================
-    // Subscriber — RULE 5: extends Thread + implements EventListener
-    // =========================================================================
-    static class Subscribe extends Thread implements EventListener {
-        private final EventDispatcher dispatcher;
-        private volatile boolean      running = true;
+    /**
+     * Subscriber owns a thread and a queue reference.
+     * It does NOT extend Thread — lifecycle is managed by ExecutorService.
+     */
+    static class Subscriber implements Runnable {
 
-        Subscribe(EventDispatcher dispatcher) {
-            this.dispatcher = dispatcher;
-            setName("Subscriber-Thread");
-            dispatcher.addListener(this);
+        private final String             name;
+        private final BlockingQueue<Event> queue;
+        private final EventListener      handler;
+        private final AtomicLong         processed = new AtomicLong(0);
+
+        Subscriber(String name, BlockingQueue<Event> queue, EventListener handler) {
+            this.name    = name;
+            this.queue   = queue;
+            this.handler = handler;
         }
 
         @Override
         public void run() {
-            System.out.println("[Subscriber] Waiting for events...");
-            while (running) {
+            System.out.printf("[%-12s] started, waiting for events%n", name);
+            while (true) {
                 try {
-                    // Blocks on eventReady.await() until Publisher signals
-                    Event event = dispatcher.consume();
-                    dispatcher.notifyListeners(event);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    running = false;
-                }
-            }
-            System.out.println("[Subscriber] Stopped.");
-        }
-
-        @Override
-        public void onEvent(Event event) {
-            System.out.printf("  [onEvent] %s consumed on %s%n",
-                event.getPayload(), Thread.currentThread().getName());
-        }
-
-        void stopSubscriber() { running = false; interrupt(); }
-    }
-
-    // =========================================================================
-    // Publisher — RULE 5: extends Thread
-    // =========================================================================
-    static class Publisher extends Thread {
-        private final EventDispatcher dispatcher;
-        private final int             count;
-
-        Publisher(EventDispatcher dispatcher, int count) {
-            this.dispatcher = dispatcher;
-            this.count      = count;
-            setName("Publisher-Thread");
-        }
-
-        @Override
-        public void run() {
-            System.out.printf("[Publisher] Will fire %d events%n", count);
-            for (int i = 1; i <= count; i++) {
-                try {
-                    Event e = new Event("OrderEvent-" + i);
-                    System.out.printf("[Publisher] Firing: %s%n", e.getPayload());
-                    // Blocks on eventConsumed.await() until Subscriber consumes
-                    dispatcher.publish(e);
-                    System.out.printf("[Publisher] Confirmed consumed: %s%n", e.getPayload());
+                    Event e = queue.take();        // blocks until event arrives
+                    if (e == POISON) break;        // identity check — sentinel exit
+                    handler.onEvent(e);
+                    processed.incrementAndGet();
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                     break;
                 }
             }
-            System.out.println("[Publisher] Done.");
+            System.out.printf("[%-12s] stopped. processed=%d%n", name, processed.get());
         }
     }
 
-    // =========================================================================
-    // main
-    // =========================================================================
+    // ── Publisher ─────────────────────────────────────────────────────────────
+
+    static class Publisher implements Runnable {
+
+        private final EventBus   bus;
+        private final int        count;
+        private final AtomicLong idGen = new AtomicLong(1);
+
+        Publisher(EventBus bus, int count) {
+            this.bus   = bus;
+            this.count = count;
+        }
+
+        @Override
+        public void run() {
+            System.out.printf("[Publisher  ] publishing %d events%n", count);
+            for (int i = 0; i < count; i++) {
+                Event e = new Event(idGen.getAndIncrement(), "OrderEvent-" + i);
+                bus.publish(e);
+                System.out.printf("[Publisher  ] published %s%n", e);
+                try { Thread.sleep(20); } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt(); break;
+                }
+            }
+            bus.shutdown();   // send one poison pill per subscriber queue
+            System.out.println("[Publisher  ] done");
+        }
+    }
+
+    // ── Demo ──────────────────────────────────────────────────────────────────
+
     public static void main(String[] args) throws InterruptedException {
-        System.out.println("=== Two Conditions, No Queue ===\n");
+        System.out.println("=== Pub/Sub with per-subscriber BlockingQueue ===\n");
 
-        EventDispatcher dispatcher = EventDispatcher.getInstance();
+        EventBus bus = new EventBus(32);
 
-        Subscribe subscriber = new Subscribe(dispatcher);
-        Publisher publisher  = new Publisher(dispatcher, 5);
+        // register 3 independent subscribers BEFORE publisher starts
+        BlockingQueue<Event> qA = bus.register();
+        BlockingQueue<Event> qB = bus.register();
+        BlockingQueue<Event> qC = bus.register();
 
-        subscriber.start();
-        Thread.sleep(50);   // let subscriber reach eventReady.await() first
-        publisher.start();
+        Subscriber subA = new Subscriber("Audit-Log",    qA, e ->
+                System.out.printf("  [Audit-Log  ] %s%n", e));
 
-        publisher.join();
-        Thread.sleep(100);
-        subscriber.stopSubscriber();
-        subscriber.join();
+        Subscriber subB = new Subscriber("Risk-Engine",  qB, e -> {
+            System.out.printf("  [Risk-Engine] %s  risk=%s%n",
+                    e, e.id() % 3 == 0 ? "WARN" : "OK");
+        });
+
+        Subscriber subC = new Subscriber("Order-Book",   qC, e -> {
+            try { Thread.sleep(40); } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            System.out.printf("  [Order-Book ] %s  (slow subscriber)%n", e);
+        });
+
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        pool.submit(subA);
+        pool.submit(subB);
+        pool.submit(subC);
+        pool.submit(new Publisher(bus, 6));
+
+        pool.shutdown();
+        pool.awaitTermination(10, TimeUnit.SECONDS);
 
         System.out.println("\n=== Done ===");
     }
-}
-
-interface EventListener {
-    void onEvent(MyCode.Event event);
 }

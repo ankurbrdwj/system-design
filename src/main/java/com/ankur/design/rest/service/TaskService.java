@@ -14,9 +14,6 @@ public class TaskService {
   private final TaskRepository taskRepository;
   private final String broker;
 
-
-
-
   public TaskService(TaskRepository taskRepository
     , @Value("${spring.broker.location}") String brokerLocation) {
     this.taskRepository = taskRepository;

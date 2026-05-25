@@ -15,7 +15,6 @@ public class AlternatePrinter {
             try{
                 while(!isATurn){
                     conditionA.await();
-
                 }
                 System.out.println(" A ");
                 isATurn=false;
@@ -23,7 +22,7 @@ public class AlternatePrinter {
             }
             catch (InterruptedException interruptedException){
                 Thread.currentThread().interrupt();
-            }finally {
+            } finally {
                 lock.unlock();
             }
     }

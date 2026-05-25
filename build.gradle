@@ -29,6 +29,8 @@ dependencies {
     runtimeOnly 'com.h2database:h2'
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    implementation     'org.openjdk.jmh:jmh-core:1.37'
+    annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
 }
 
 // Java Vector API requires incubator module (JDK 16+, still incubating in JDK 21)
@@ -50,7 +52,7 @@ sourceSets {
 
 tasks.register('runMain', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.ankur.design.lld.kayak.room.reservation.Main'
+    mainClass = 'com.ankur.design.hft.interview.SingletonPatterns'
 }
 
 tasks.named('test') {
