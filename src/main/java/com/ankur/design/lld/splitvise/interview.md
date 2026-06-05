@@ -1,6 +1,6 @@
 is this LLD design exercise or leetcode question ?
 how much does each owes the other
-write java function to ouput
+write java function to output
 input format was not defined
 input:
 Sarah pays 400 for food for everyone in the group ,

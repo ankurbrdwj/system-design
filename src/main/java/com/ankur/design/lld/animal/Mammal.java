@@ -19,6 +19,11 @@ public abstract class Mammal extends Animal {
         System.out.println(name + " is regulating body temperature (warm-blooded)");
     }
 
+    // ALL mammals nurse young with milk — even Platypus (sweats milk after hatching)
+    public void nurseYoung() {
+        System.out.println(name + " is nursing young with milk");
+    }
+
     public boolean isWarmBlooded() {
         return warmBlooded;
     }

@@ -7,7 +7,7 @@ package com.ankur.design.lld.animal;
  *   Predator as interface lets completely different class hierarchies share the role.
  *   If Predator were an abstract class, Shark couldn't extend both Animal and Predator.
  */
-public class Shark extends Animal implements Predator {
+public class Shark extends Animal implements Predator, Swimmer {
 
     public Shark(String name) {
         super(name);
@@ -23,9 +23,18 @@ public class Shark extends Animal implements Predator {
         System.out.println(name + " is ambushing from below");
     }
 
-    // Shark stalks differently — overrides the default method
     @Override
     public void stalk() {
         System.out.println(name + " is circling slowly, unseen");
+    }
+
+    @Override
+    public void swim() {
+        System.out.println(name + " is cutting through water with powerful strokes");
+    }
+
+    @Override
+    public void dive() {
+        System.out.println(name + " is descending into the deep");
     }
 }
